@@ -615,6 +615,116 @@ static void CmdListObjects(const std::string & params, const std::string & resul
 
 
 // ---------------------------------------------------------------------------
+// create_arc: Draw an arc by center, radius, start angle, end angle
+// ---------------------------------------------------------------------------
+
+static void CmdCreateArc(const std::string & params, const std::string & resultFile)
+{
+  ksapi::IDrawingContainerPtr container = GetDrawingContainer();
+  if (!container)
+  {
+    WriteResult(resultFile, false, "No active drawing container");
+    return;
+  }
+
+  double cx = JsonGetNumber(params, "cx");
+  double cy = JsonGetNumber(params, "cy");
+  double x1 = JsonGetNumber(params, "x1");
+  double y1 = JsonGetNumber(params, "y1");
+  double x2 = JsonGetNumber(params, "x2");
+  double y2 = JsonGetNumber(params, "y2");
+  bool direction = JsonGetBool(params, "direction", false); // false = counter-clockwise
+  int style = JsonGetInt(params, "style", 1);
+
+  ksapi::IArcsPtr arcs = container->GetArcs();
+  if (!arcs)
+  {
+    WriteResult(resultFile, false, "Failed to get arcs collection");
+    return;
+  }
+
+  ksapi::IArcPtr arc = arcs->Add();
+  if (!arc)
+  {
+    WriteResult(resultFile, false, "Failed to create arc");
+    return;
+  }
+
+  arc->SetXc(cx);
+  arc->SetYc(cy);
+  arc->SetX1(x1);
+  arc->SetY1(y1);
+  arc->SetX2(x2);
+  arc->SetY2(y2);
+  arc->SetDirection(direction);
+  arc->SetStyle(style);
+  arc->Update();
+
+  WriteResult(resultFile, true, "Arc created");
+}
+
+
+// ---------------------------------------------------------------------------
+// create_linear_dimension: Add a linear dimension
+// ---------------------------------------------------------------------------
+
+static void CmdCreateLinearDimension(const std::string & params, const std::string & resultFile)
+{
+  ksapi::IDrawingContainerPtr container = GetDrawingContainer();
+  if (!container)
+  {
+    WriteResult(resultFile, false, "No active drawing container");
+    return;
+  }
+
+  double x1 = JsonGetNumber(params, "x1");
+  double y1 = JsonGetNumber(params, "y1");
+  double x2 = JsonGetNumber(params, "x2");
+  double y2 = JsonGetNumber(params, "y2");
+  double textY = JsonGetNumber(params, "text_y", y1 + 10);
+  int orientation = JsonGetInt(params, "orientation", 0); // 0=horizontal, 1=vertical
+
+  // Get active view for dimensions
+  if (!kompasApp) { WriteResult(resultFile, false, "No app"); return; }
+  ksapi::IKompasDocument2DPtr doc2D = kompasApp->GetActiveDocument();
+  if (!doc2D) { WriteResult(resultFile, false, "No active document"); return; }
+  ksapi::IViewsAndLayersManagerPtr viewsMgr = doc2D->GetViewsAndLayersManager();
+  if (!viewsMgr) { WriteResult(resultFile, false, "No views manager"); return; }
+  ksapi::IViewsPtr views = viewsMgr->GetViews();
+  if (!views) { WriteResult(resultFile, false, "No views"); return; }
+  ksapi::IViewPtr view = views->GetActiveView();
+  if (!view) { WriteResult(resultFile, false, "No active view"); return; }
+
+  ksapi::ISymbols2DContainerPtr symContainer(view);
+  if (!symContainer) { WriteResult(resultFile, false, "No symbols container"); return; }
+  ksapi::ILineDimensionsPtr dims = symContainer->GetLineDimensions();
+  if (!dims)
+  {
+    WriteResult(resultFile, false, "Failed to get dimensions collection");
+    return;
+  }
+
+  ksapi::ILineDimensionPtr dim = dims->Add();
+  if (!dim)
+  {
+    WriteResult(resultFile, false, "Failed to create dimension");
+    return;
+  }
+
+  dim->SetX1(x1);
+  dim->SetY1(y1);
+  dim->SetX2(x2);
+  dim->SetY2(y2);
+  dim->SetX3((x1 + x2) / 2.0);
+  dim->SetY3(textY);
+  dim->SetOrientation(static_cast<ksLineDimensionOrientationEnum>(orientation));
+  dim->Update();
+
+  WriteResult(resultFile, true, "Linear dimension created");
+}
+
+
+// ---------------------------------------------------------------------------
 // Command dispatcher
 // ---------------------------------------------------------------------------
 
@@ -628,15 +738,15 @@ static void ExecuteCommand(const std::string & cmdFile, const std::string & resu
   }
 
   std::string command = JsonGetString(json, "command");
-  // The "params" section is the whole JSON for simplicity
-  // (since our helpers search for keys in the full string)
 
   if (command == "create_document")       CmdCreateDocument(json, resultFile);
   else if (command == "create_line")      CmdCreateLine(json, resultFile);
   else if (command == "create_circle")    CmdCreateCircle(json, resultFile);
+  else if (command == "create_arc")       CmdCreateArc(json, resultFile);
   else if (command == "create_rectangle") CmdCreateRectangle(json, resultFile);
   else if (command == "create_text")      CmdCreateText(json, resultFile);
   else if (command == "create_polyline")  CmdCreatePolyline(json, resultFile);
+  else if (command == "create_linear_dimension") CmdCreateLinearDimension(json, resultFile);
   else if (command == "fill_drawing_stamp") CmdFillDrawingStamp(json, resultFile);
   else if (command == "save_document")    CmdSaveDocument(json, resultFile);
   else if (command == "export_to_dxf")    CmdExportToDxf(json, resultFile);
