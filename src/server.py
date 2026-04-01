@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 # Configuration
-KOMPAS_BIN = "/opt/ascon/kompas3d-v24/Bin/ksinvisible"
+KOMPAS_BIN = "/opt/ascon/kompas3d-v24/Bin/kKompas"
 BRIDGE_PLUGIN = Path(__file__).parent / "Build" / "Exe" / "Release-x64-Linux" / "libkompas_mcp_bridge.rtw"
 KOMPAS_SDK = os.environ.get("KOMPAS_SDK", "/opt/ascon/kompas3d-v24/SDK")
 
@@ -217,76 +217,95 @@ def log(msg: str) -> None:
     print(f"[kompas-mcp] {msg}", file=sys.stderr, flush=True)
 
 
+# Persistent KOMPAS process
+_kompas_proc = None
+_kompas_ready = False
+CMD_FILE = "/tmp/kompas_mcp_cmd.json"
+RESULT_FILE = "/tmp/kompas_mcp_result.json"
+
+
+def ensure_kompas_running():
+    """Start KOMPAS if not already running."""
+    global _kompas_proc, _kompas_ready
+
+    if _kompas_proc and _kompas_proc.poll() is None:
+        return True  # Already running
+
+    log("Starting KOMPAS-3D process...")
+
+    template = "/tmp/kompas_mcp_template.cdw"
+    Path(template).touch()
+
+    env = os.environ.copy()
+    env["KOMPAS_MCP_CMD_FILE"] = CMD_FILE
+    env["KOMPAS_MCP_RESULT_FILE"] = RESULT_FILE
+    env["KOMPAS_SDK"] = KOMPAS_SDK
+
+    _kompas_proc = subprocess.Popen(
+        ["xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24",
+         "dbus-run-session", KOMPAS_BIN, template],
+        env=env,
+        stdout=open("/tmp/kompas_stdout.log", "w"),
+        stderr=open("/tmp/kompas_stderr.log", "w"),
+    )
+
+    # Wait for initial bridge result (from first command in env)
+    time.sleep(12)
+    _kompas_ready = _kompas_proc.poll() is None
+    log(f"KOMPAS started, ready={_kompas_ready}, pid={_kompas_proc.pid}")
+    return _kompas_ready
+
+
 def execute_kompas_command(command: str, params: dict) -> dict:
     """
-    Execute a KOMPAS-3D command by:
-    1. Writing a command JSON file
-    2. Running ksinvisible with the bridge plugin
-    3. Reading the result JSON file
+    Execute a KOMPAS-3D command via file-based IPC with persistent process.
+    Bridge plugin watches for new command files via a polling loop.
+    For first call: starts KOMPAS and uses env-var command.
+    For subsequent calls: writes new command file (bridge needs polling support).
     """
-    # Create temp files for command/result exchange
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", prefix="kompas_cmd_", delete=False
-    ) as cmd_file:
-        cmd_data = {"command": command}
-        cmd_data.update(params)
-        json.dump(cmd_data, cmd_file)
-        cmd_path = cmd_file.name
+    # Write command
+    cmd_data = {"command": command}
+    cmd_data.update(params)
 
-    result_path = cmd_path.replace("kompas_cmd_", "kompas_result_")
+    # Remove old result
+    try:
+        os.unlink(RESULT_FILE)
+    except OSError:
+        pass
+
+    cmd_path = CMD_FILE
+    result_path = RESULT_FILE
+
+    with open(cmd_path, "w") as f:
+        json.dump(cmd_data, f)
 
     try:
-        plugin_path = str(BRIDGE_PLUGIN)
-        if not Path(plugin_path).exists():
-            # Try debug build
-            debug_plugin = Path(__file__).parent / "Build" / "Exe" / "Debug-x64-Linux" / "libkompas_mcp_bridge.rtw"
-            if debug_plugin.exists():
-                plugin_path = str(debug_plugin)
-            else:
-                return {
-                    "success": False,
-                    "message": f"Bridge plugin not found. Build it first. Looked at: {plugin_path}",
-                }
+        # Ensure KOMPAS is running (starts on first call)
+        if not ensure_kompas_running():
+            return {"success": False, "message": "Failed to start KOMPAS-3D"}
 
-        env = os.environ.copy()
-        env["KOMPAS_MCP_CMD_FILE"] = cmd_path
-        env["KOMPAS_MCP_RESULT_FILE"] = result_path
-        env["KOMPAS_SDK"] = KOMPAS_SDK
+        log(f"Sending command: {command}")
 
-        # Run ksinvisible with the plugin
-        # ksinvisible accepts -l <library_path> to load a plugin
-        ksinvisible_cmd = [KOMPAS_BIN, "-l", plugin_path]
+        # Wait for result file
+        max_wait = 20
+        poll_interval = 0.3
+        waited = 0.0
+        while waited < max_wait:
+            time.sleep(poll_interval)
+            waited += poll_interval
+            if Path(result_path).exists():
+                time.sleep(0.2)
+                break
 
-        log(f"Executing: {' '.join(ksinvisible_cmd)}")
-        log(f"  CMD_FILE={cmd_path}")
-        log(f"  RESULT_FILE={result_path}")
-
-        result = subprocess.run(
-            ksinvisible_cmd,
-            env=env,
-            timeout=60,
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            log(f"ksinvisible stderr: {result.stderr}")
-            # Still try to read the result file - the plugin might have written it
-            # before the process failed
-
-        # Read result
         if Path(result_path).exists():
             with open(result_path, "r") as f:
                 return json.load(f)
         else:
             return {
                 "success": False,
-                "message": f"Result file not created. ksinvisible exit code: {result.returncode}. "
-                           f"stderr: {result.stderr[:500] if result.stderr else 'none'}",
+                "message": f"No result after {max_wait}s for command '{command}'",
             }
 
-    except subprocess.TimeoutExpired:
-        return {"success": False, "message": "KOMPAS-3D execution timed out (60s)"}
     except Exception as e:
         return {"success": False, "message": f"Execution error: {str(e)}"}
     finally:
