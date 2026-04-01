@@ -1,0 +1,89 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/Build/Obj/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "WITH_PCH": "OFF",
+        "WITH_MODULES": "OFF",
+        "WITH_CONAN": "OFF"
+      }
+    },
+    {
+      "name": "release-default",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "OUTPUT_DIRECTORY": "${sourceDir}/Build/Exe/${presetName}",
+        "KOMPAS_OUTPUT_DIR": "$env{KOMPAS_SDK}/../Bin"
+      }
+    },
+    {
+      "name": "debug-default",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "OUTPUT_DIRECTORY": "${sourceDir}/Build/Exe/${presetName}",
+        "KOMPAS_OUTPUT_DIR": "$env{KOMPAS_SDK}/../Bin"
+      }
+    },
+    {
+      "name": "clang-linux-default",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-18",
+        "CMAKE_CXX_COMPILER": "clang++-18",
+        "CMAKE_LINK_DEPENDS_NO_SHARED": "ON",
+        "WITH_MOLD": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "Release-x64-Linux",
+      "displayName": "Release-x64-Linux",
+      "inherits": [
+        "clang-linux-default",
+        "release-default",
+        "default"
+      ],
+      "cacheVariables": {
+        "PURE_QT": "ON"
+      }
+    },
+    {
+      "name": "Debug-x64-Linux",
+      "displayName": "Debug-x64-Linux",
+      "inherits": [
+        "clang-linux-default",
+        "debug-default",
+        "default"
+      ],
+      "cacheVariables": {
+        "PURE_QT": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "Release-x64-Linux",
+      "configurePreset": "Release-x64-Linux"
+    },
+    {
+      "name": "Debug-x64-Linux",
+      "configurePreset": "Debug-x64-Linux"
+    }
+  ]
+}

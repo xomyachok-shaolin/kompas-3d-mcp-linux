@@ -1,0 +1,39 @@
+# Build outputs
+Build/
+build/
+*.o
+*.so
+*.rtw
+*.a
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.cmake/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+*.egg
+
+# Temp files
+*.tmp
+kompas_cmd_*.json
+kompas_result_*.json
+
+# OS
+.DS_Store
+Thumbs.db
