@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <locale>
 #include <codecvt>
+#include <dlfcn.h>
+#include <thread>
+#include <chrono>
 
 
 static ksapi::IApplication * kompasApp = nullptr;
@@ -783,6 +786,12 @@ void RunCommand(unsigned int commandId, ksapi::ksRunCommandModeEnum mode)
 
 APP_EXP_FUNC(bool) LoadKompasLibrary(ksapi::IApplication & app, ksapi::IKompasLibraryActions & libraryActions)
 {
+  // Debug: log that we were loaded
+  {
+    std::ofstream dbg("/tmp/mcp_bridge_debug.log", std::ios::app);
+    dbg << "LoadKompasLibrary called!" << std::endl;
+  }
+
   libraryActions.AddRunCommandHandler(RunCommand);
   kompasApp = &app;
 
@@ -800,4 +809,155 @@ APP_EXP_FUNC(bool) LoadKompasLibrary(ksapi::IApplication & app, ksapi::IKompasLi
 
 APP_EXP_FUNC(void) UnloadKompasLibrary()
 {
+}
+
+// ---------------------------------------------------------------------------
+// Background thread: waits for kompasApp then executes command
+// ---------------------------------------------------------------------------
+#include <thread>
+#include <chrono>
+
+static bool TryGetAppFromSymbol(); // forward declaration
+
+// Flag: command needs execution from main thread
+static bool g_needsExecution = false;
+static std::string g_cmdFile;
+static std::string g_resultFile;
+
+
+static void BackgroundWaitForApp()
+{
+  std::ofstream dbg("/tmp/mcp_bridge_debug.log", std::ios::app);
+
+  const char * cmdFileEnv = std::getenv("KOMPAS_MCP_CMD_FILE");
+  const char * resultFileEnv = std::getenv("KOMPAS_MCP_RESULT_FILE");
+  if (!cmdFileEnv || !resultFileEnv) return;
+
+  g_cmdFile = cmdFileEnv;
+  g_resultFile = resultFileEnv;
+
+  dbg << "BackgroundWait: waiting for app..." << std::endl;
+
+  for (int i = 0; i < 30; ++i)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!kompasApp && i >= 8)
+      TryGetAppFromSymbol();
+    // Try calling ProcessLibRun to trigger LoadKompasLibrary
+    if (!kompasApp && i == 15) // after 7.5s
+    {
+      typedef void (*ProcessLibRunFn)(const wchar_t*);
+      void * plrSym = dlsym(RTLD_DEFAULT, "_ZN15MainApplication13ProcessLibRunEPKw");
+      if (plrSym)
+      {
+        dbg << "BackgroundWait: calling ProcessLibRun('MCP Bridge')" << std::endl;
+        auto processLibRun = reinterpret_cast<ProcessLibRunFn>(plrSym);
+        processLibRun(L"MCP Bridge");
+        dbg << "BackgroundWait: ProcessLibRun returned" << std::endl;
+      }
+    }
+
+    if (kompasApp)
+    {
+      dbg << "BackgroundWait: kompasApp ready after " << (i+1)*500 << "ms!" << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+      ExecuteCommand(g_cmdFile, g_resultFile);
+      dbg << "BackgroundWait: command executed!" << std::endl;
+      return;
+    }
+  }
+  dbg << "BackgroundWait: timeout" << std::endl;
+  WriteResult(std::string(resultFileEnv), false, "Timeout waiting for KOMPAS");
+}
+
+
+// ---------------------------------------------------------------------------
+// Try to get IApplication via KOMPAS internal symbol
+// ---------------------------------------------------------------------------
+#include <dlfcn.h>
+
+static bool TryGetAppFromSymbol()
+{
+  std::ofstream dbg("/tmp/mcp_bridge_debug.log", std::ios::app);
+
+  // GetItApplicationObject returns the internal app object
+  // We need to cast it to ksapi::IApplication
+  typedef void* (*GetItAppFn)();
+
+  // Try to find the symbol in already-loaded libraries
+  void * sym = dlsym(RTLD_DEFAULT, "_Z22GetItApplicationObjectv");
+  if (!sym)
+  {
+    dbg << "TryGetApp: GetItApplicationObject not found" << std::endl;
+    return false;
+  }
+
+  dbg << "TryGetApp: GetItApplicationObject found at " << sym << std::endl;
+
+  auto getApp = reinterpret_cast<GetItAppFn>(sym);
+  void * appObj = getApp();
+  if (!appObj)
+  {
+    dbg << "TryGetApp: GetItApplicationObject returned null" << std::endl;
+    return false;
+  }
+
+  dbg << "TryGetApp: got app object at " << appObj << std::endl;
+
+  // GetKsAPIC returns a C-API wrapper, not IApplication directly
+  // Use GetApplicationForIID to get the proper ksapi interface
+  // Signature: void* MainApplication::GetApplicationForIID(unsigned int iid, int* result)
+  // But IApplication has no IID, so we need another approach
+
+  // Try AC::GetApplication (static member, simpler signature)
+  typedef void* (*ACGetAppFn)(int);
+  void * acGetAppSym = dlsym(RTLD_DEFAULT, "_ZN2AC14GetApplicationE11ApeApplType");
+  if (acGetAppSym)
+  {
+    dbg << "TryGetApp: AC::GetApplication found" << std::endl;
+    auto acGetApp = reinterpret_cast<ACGetAppFn>(acGetAppSym);
+    for (int i = 0; i < 8; ++i)
+    {
+      void * app = acGetApp(i);
+      if (app)
+      {
+        dbg << "TryGetApp: AC::GetApplication(" << i << ") returned " << app << std::endl;
+        // Try to use as IApplication - test with a safe virtual call
+        // IApplication first virtual method after IAPIObject should be safe to probe
+        kompasApp = reinterpret_cast<ksapi::IApplication*>(app);
+        return true;
+      }
+    }
+  }
+
+  // Try entry_points::GetKsAPIC
+  typedef void* (*GetKsAPICFn)();
+  void * ksApiSym = dlsym(RTLD_DEFAULT, "_ZN12entry_points9GetKsAPICEv");
+  if (ksApiSym)
+  {
+    auto getKsApi = reinterpret_cast<GetKsAPICFn>(ksApiSym);
+    void * ksApiObj = getKsApi();
+    if (ksApiObj)
+    {
+      dbg << "TryGetApp: GetKsAPIC returned " << ksApiObj << " (NOT using as IApplication - different type)" << std::endl;
+    }
+  }
+
+  dbg << "TryGetApp: could not obtain IApplication" << std::endl;
+  return false;
+}
+
+
+__attribute__((constructor))
+static void OnDlOpen()
+{
+  std::ofstream dbg("/tmp/mcp_bridge_debug.log", std::ios::app);
+  dbg << "OnDlOpen: .rtw loaded" << std::endl;
+
+  const char * cmdFileEnv = std::getenv("KOMPAS_MCP_CMD_FILE");
+  if (cmdFileEnv)
+  {
+    dbg << "OnDlOpen: starting background executor thread" << std::endl;
+    std::thread(BackgroundWaitForApp).detach();
+  }
 }

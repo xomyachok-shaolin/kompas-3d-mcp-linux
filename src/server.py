@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Configuration
 KOMPAS_BIN = "/opt/ascon/kompas3d-v24/Bin/ksinvisible"
-BRIDGE_PLUGIN = Path(__file__).parent / "Build" / "Exe" / "Release-x64-Linux" / "kompas_mcp_bridge.rtw"
+BRIDGE_PLUGIN = Path(__file__).parent / "Build" / "Exe" / "Release-x64-Linux" / "libkompas_mcp_bridge.rtw"
 KOMPAS_SDK = os.environ.get("KOMPAS_SDK", "/opt/ascon/kompas3d-v24/SDK")
 
 # MCP server info
@@ -239,7 +239,7 @@ def execute_kompas_command(command: str, params: dict) -> dict:
         plugin_path = str(BRIDGE_PLUGIN)
         if not Path(plugin_path).exists():
             # Try debug build
-            debug_plugin = Path(__file__).parent / "Build" / "Exe" / "Debug-x64-Linux" / "kompas_mcp_bridge.rtw"
+            debug_plugin = Path(__file__).parent / "Build" / "Exe" / "Debug-x64-Linux" / "libkompas_mcp_bridge.rtw"
             if debug_plugin.exists():
                 plugin_path = str(debug_plugin)
             else:

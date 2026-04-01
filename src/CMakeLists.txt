@@ -73,9 +73,17 @@ target_compile_definitions(${this_target} PRIVATE
   ${UNICODE_MACROS}
 )
 
-# No extra link libraries needed for the plugin
-target_link_libraries(${this_target} PRIVATE
-)
+# Qt5 for QTimer (main-thread scheduling)
+find_package(Qt5 COMPONENTS Core QUIET)
+if(Qt5_FOUND)
+  target_link_libraries(${this_target} PRIVATE Qt5::Core)
+  message(STATUS "Qt5 found, enabling QTimer support")
+else()
+  message(STATUS "Qt5 not found, QTimer disabled")
+endif()
+
+# dl for dlsym
+target_link_libraries(${this_target} PRIVATE dl)
 
 target_compile_features(${this_target} PRIVATE
   ${CXX_STD_VERSION}
